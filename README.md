@@ -1,395 +1,260 @@
-# TeachMateGPT-A-Multi-Agent-Knowledge-Grounded-Framework-for-Pedagogical-Assessment-Generation
+# TeachMateGPT: A Multi-Agent Knowledge-Grounded Framework for Pedagogical Assessment Generation from Science Curriculum Materials
 
-Bangla Class 8 science teacher-assistant pipeline for generating textbook-grounded assessments.
+Writing a full set of board-style assessments by hand, chapter after chapter, is one of the
+heaviest recurring demands on a science teacher's time. Large language models can speed this up,
+but generation left unconstrained tends to invent facts, drift away from the intended chapter,
+produce weak distractors, or break the expected board format, risks a teacher cannot afford to
+hand to students untested. The stakes are higher still for Bangladeshi science teachers, who must
+prepare Class 8 assessments strictly from the National Curriculum and Textbook Board (NCTB)
+syllabus: every item has to align with the textbook, read naturally in Bangla, and match a
+requested difficulty level.
 
-This repository implements an end-to-end research workflow:
-- ingest NCTB-style textbook PDFs (including scanned PDFs),
-- chunk them with curriculum-aware multi-resolution logic (COPE),
-- retrieve evidence via hybrid RAG,
-- generate selected assessment types (currently MCQ + সৃজনশীল),
-- verify faithfulness/relevance risk,
-- export full and per-task JSON artifacts for experiments.
+Retrieval-augmented generation (RAG) is the standard answer to hallucination, and it has become
+common in educational NLP. Yet the RAG systems built for this space so far retrieve over flat,
+fixed-size chunks that ignore how a textbook is actually organized, generate one question format
+at a time rather than the mixed MCQ-and-creative-question sets a real exam needs, and rarely stop
+to ask whether the evidence they found is even sufficient before generating an answer. For Bangla
+NCTB material specifically, the systems that exist mostly answer student questions; almost none
+author teacher-facing, multi-format assessments, and fewer still know when to refuse rather than
+guess. A plain retrieve-then-generate pipeline cannot close these gaps either: teacher requests
+are often underspecified and need clarification, the textbooks themselves are noisy (many are
+scanned, not born-digital), MCQs and creative questions impose very different structural rules,
+and every generated item still needs a check before it reaches a classroom. **TeachMateGPT**
+addresses this with a multi-agent system built around four advances in curriculum-grounded
+science-assessment authoring:
+
+| Mechanism | What it does | Why it matters |
+|---|---|---|
+| **COPE** (Curriculum-Oriented Pedagogical Embedding) | Replaces fixed-size token-window chunking with a hierarchical index that segments textbooks along syllabus structure (chapter → section → chunk) at three resolutions (macro/meso/micro), and links them with lineage and neighbor edges set at ingest time | Lets retrieval match evidence granularity to a teacher's request and traverse outward to recover related instructional content, not just a single parent chunk |
+| **IAC** (Intent, Ambiguity detection, and Clarification) | A staged, fail-closed routing layer that screens greetings, harmful requests, and off-topic input, flags underspecified topics, and asks for clarification before retrieval begins | Only well-specified curriculum requests reach retrieval and generation |
+| **Hybrid retrieval with CCI/CCR and a coverage gate** | Fuses dense and lexical (BM25) retrieval via weighted reciprocal rank fusion, restores pedagogical context around isolated fragments (**CCI**), removes redundant overlapping evidence (**CCR**), and withholds generation when curriculum coverage falls short | Stops assessment authoring on weak evidence instead of generating on a guess |
+| **SAVER** (Source-Attributed Verification and Evidence Ranking) | A post-generation agent that scores faithfulness, curriculum relevance, and hallucination risk for every item against its retrieved evidence, and applies stricter checks across each creative question's four sub-parts | Flags unsupported items for **teacher review** instead of silently filtering or auto-releasing them |
+
+To evaluate it we release **NCTB-SciGen8**, a curriculum-grounded dataset of 198 Bangla Class 8
+science assessment items (143 MCQs and 55 creative questions) that spans all 14 chapters of the
+official NCTB Class 8 Science textbook. The pipeline produced every item directly, and three
+practicing teachers rated them. TeachMateGPT raises faithfulness from **0.68 to 0.96** and answer
+relevancy from **0.60 to 0.89** over a vanilla RAG baseline, beats RAPTOR, GraphRAG, CRAG, and
+Adaptive RAG baselines, and raises teacher-rated overall utility from **2.00 to 4.80** on a
+5-point scale.
+
+- 📄 Paper: https://arxiv.org/abs/2608.13708
+- 🤗 Dataset (NCTB-SciGen8): *to be released under CC BY-NC 4.0 for non-commercial research use*
+
+![TeachMateGPT workflow](diagrams/TeachmateGPT-Introduction.png)
 
 ---
 
-## 1) What this system does
+## Dataset: NCTB-SciGen8
 
-Given a teacher query (for example, requesting MCQs and creative questions from a chapter), the system:
-- classifies intent and handles ambiguity,
-- retrieves relevant textbook chunks from ChromaDB using hybrid retrieval,
-- generates requested assessment tasks with specialist prompts,
-- verifies grounding quality with a verification agent,
-- saves machine-readable outputs for downstream evaluation and auditing.
+NCTB-SciGen8 holds 198 Bangla question items that the pipeline generated and verified directly,
+and it covers the full NCTB Class 8 Science syllabus (14 chapters, 156 pages) across Biology,
+Chemistry, Physics, and Environment. Each item keeps its full generation record: the teacher
+query, the retrieved evidence with source, chapter, and concept labels, the generated item
+itself, and its SAVER verification report. Three practicing science teachers independently
+reviewed a subset of the items.
 
-Primary users:
-- teachers building classroom question sets,
-- researchers running controlled RAG/assessment experiments,
-- contributors working on Bangla curriculum-grounded generation.
+**Per-chapter breakdown**
+
+| Ch. | Chapter (English) | Pages | MCQ | CQ | Subject |
+|--:|---|---|--:|--:|---|
+| 1 | Classification of Animal Kingdom | 1–12 | 13 | 4 | Biology |
+| 2 | Growth & Heredity of Organisms | 13–23 | 11 | 4 | Biology |
+| 3 | Diffusion, Osmosis & Transpiration | 24–33 | 10 | 4 | Biology |
+| 4 | Reproduction in Plants | 34–44 | 10 | 4 | Biology |
+| 5 | Coordination & Excretion | 45–54 | 9 | 4 | Biology |
+| 6 | Structure of the Atom | 55–64 | 11 | 4 | Chemistry |
+| 7 | Earth & Gravitation | 65–74 | 10 | 4 | Physics |
+| 8 | Chemical Reactions | 75–88 | 12 | 5 | Chemistry |
+| 9 | Circuit & Current Electricity | 89–97 | 10 | 4 | Physics |
+| 10 | Acid, Base & Salt | 98–107 | 10 | 4 | Chemistry |
+| 11 | Light | 108–118 | 8 | 4 | Physics |
+| 12 | Space & Satellites | 119–128 | 9 | 3 | Physics |
+| 13 | Food & Nutrition | 129–146 | 10 | 4 | Biology |
+| 14 | Environment & Ecosystem | 147–156 | 10 | 3 | Environment |
+| **Total** | **14 chapters, 156 pages** | | **143** | **55** | |
+
+Every MCQ follows the NCTB format: a Bangla stem with four options, **ক/খ/গ/ঘ**. Every CQ follows
+the board-style structure: an **উদ্দীপক** (stimulus) with four cognitive-level sub-questions,
+**Gyan** (knowledge), **Onudhabon** (comprehension), **Proyog** (application), and **Ucchotor
+Dokkhota** (higher-order skills).
 
 ---
 
-## 2) End-to-end architecture
+## Methodology
 
-Runtime graph (`agents/orchestrator.py`) is built with LangGraph:
+The dataset above comes directly from the pipeline described here. A teacher query passes
+through six stages:
 
-`intent -> ambiguity -> (clarification or retrieval) -> assessment -> verification -> end`
+![TeachMateGPT methodology](diagrams/TeachmateGPT-Methodology.png)
 
-### Visual overview: COPE → Retrieval → Assessment → SAVER
+| Stage | Agent(s) | Role |
+|---|---|---|
+| 1. Knowledge Base Construction (**COPE**) | *(offline)* | Curriculum acquisition (native and vision-OCR text extraction), hierarchical structural segmentation along syllabus boundaries, multi-resolution chunking (macro/meso/micro), graph-aware lineage and neighbor links, embedding-based indexing |
+| 2. Intent Analysis & Query Routing (**IAC**) | Intent Agent, Ambiguity Detection Agent, Clarification Agent | Filters unrelated or harmful queries, flags underspecified topics, and requests clarification before retrieval continues |
+| 3. Hybrid Retrieval, Evidence Refinement & Coverage Validation | Retrieval Agent, Concept Detector | Dense and lexical (BM25) hybrid search merged by weighted RRF; **CCI** restores context; **CCR** reduces redundancy; a coverage gate withholds generation on insufficient evidence; evidence is labeled with chapter and concept |
+| 4. Multi-Format Assessment Generation | Assessment Composer, MCQ Specialist, Creative Specialist | Produces NCTB-format MCQs and board-style CQs at the requested difficulty, grounded in the same validated evidence |
+| 5. Source-Attributed Verification (**SAVER**) | Verification Agent | Scores faithfulness, curriculum relevance, and hallucination risk per item, and flags unsupported items for teacher attention instead of auto-filtering them |
+| 6. Auditable Output Packaging | *(export)* | Packages the query, evidence with provenance, generated item, verification report, and execution trace into one record, the basis of NCTB-SciGen8 |
 
-**Full names (this repo):**
+**COPE indexing, in numbers.** All 14 chapters are ingested into 793 total chunks: 181 macro-tier
+(3600/650 character window/overlap), 255 meso-tier (1900/320), and 357 micro-tier (1100/180).
 
-| Short | Full / meaning |
-|--------|----------------|
-| **COPE** | **C**urriculum-**O**riented **P**edagogical **E**mbedding — ingestion, multi-resolution chunking, embeddings, and Chroma persistence (§3). |
-| **Retrieval** | Hybrid **R**etrieval-**A**ugmented **G**eneration-style pipeline: dense vector search + lexical **BM25** + **RRF** (Reciprocal Rank Fusion), neighbor/graph expansion, and coverage gates (§4). Not a separate acronym beyond standard RAG/BM25/RRF. |
-| **Assessment generation** | Task-grounded question synthesis (MCQ and সৃজনশীল) via `assessment_agent` and specialist prompts — **not** a spelled acronym in code; “assessment generation” is the descriptive term (§5). |
-| **SAVER** | **S**ource-**A**ttributed **V**erification and **E**vidence **R**anking — post-generation faithfulness, relevance, and hallucination-risk scoring (§6). |
+---
 
-The Mermaid diagram below is generated as Markdown in this file (rendered on GitHub/GitLab and many editors). It separates **offline KB construction (COPE)** from the **online teacher path**: retrieval draws evidence from the COPE-built store; **SAVER** runs before JSON export.
+## Results
 
-```mermaid
-flowchart TB
-  subgraph COPE["Offline — COPE: Curriculum-Oriented Pedagogical Embedding"]
-    direction TB
-    PDF["Textbook PDFs\n(native or scanned)"]
-    LOAD["Load / OCR\n(scanned_pdf_loader)"]
-    CHUNK["Structural chunking\nmacro · meso · micro (+ optional token_micro)"]
-    META["Lineage & graph metadata\n(parent IDs, neighbors, headings)"]
-    EMB["Embed\n(OpenAIEmbeddings)"]
-    STORE["Persist + manifest\n(embed_and_store)"]
-    PDF --> LOAD --> CHUNK --> META --> EMB --> STORE
-    STORE --> VS[("ChromaDB\nvector collection")]
-  end
+The six stages above are evaluated below, first with automatic metrics, then with human
+judgment.
 
-  subgraph RUN["Online — teacher turn"]
-    direction TB
-    Q["Teacher query\n(+ tasks, difficulty)"]
-    PRE["Intent · ambiguity\n(optional clarification)"]
-    RET["Retrieval: hybrid RAG\nChroma vectors + BM25 + RRF\nexpansion · dedupe · coverage gate"]
-    GEN["Assessment generation\n(specialists: MCQ, সৃজনশীল)"]
-    VER["SAVER: Source-Attributed\nVerification and Evidence Ranking\n(scores + flagged items)"]
-    OUT["JSON artifacts\n(run / session / per-task)"]
-    Q --> PRE --> RET
-    VS -. "grounding evidence" .-> RET
-    RET --> GEN --> VER --> OUT
-  end
+**RAGAS evaluation: TeachMateGPT against ablations and RAG baselines**
+
+| Configuration | Faithfulness ↑ | Answer Relevancy ↑ | Context Precision ↑ | Context Recall ↑ |
+|---|--:|--:|--:|--:|
+| **TeachMateGPT** | **0.96** | **0.89** | **0.92** | **0.91** |
+| w/o COPE | 0.86 | 0.76 | 0.73 | 0.75 |
+| w/o SAVER | 0.79 | 0.86 | 0.90 | 0.89 |
+| w/o CCR | 0.83 | 0.81 | 0.84 | 0.85 |
+| w/o CCI | 0.84 | 0.82 | 0.85 | 0.86 |
+| w/o IAC | 0.81 | 0.77 | 0.89 | 0.88 |
+| Vanilla RAG | 0.68 | 0.60 | 0.54 | 0.58 |
+| RAPTOR | 0.80 | 0.75 | 0.71 | 0.78 |
+| GraphRAG | 0.84 | 0.79 | 0.80 | 0.83 |
+| CRAG | 0.86 | 0.81 | 0.84 | 0.85 |
+| Adaptive RAG | 0.79 | 0.76 | 0.73 | 0.79 |
+
+**Human evaluation** (three practicing science teachers, 5-point Likert scale, mean ± s.d.)
+
+| Configuration | Pedagogical Alignment ↑ | Stimulus Realism ↑ | Linguistic Fluency ↑ | Overall Utility ↑ |
+|---|--:|--:|--:|--:|
+| **TeachMateGPT** | **4.90 ± 0.10** | **4.70 ± 0.10** | **4.60 ± 0.10** | **4.80 ± 0.10** |
+| w/o COPE | 4.05 ± 0.10 | 3.90 ± 0.12 | 4.35 ± 0.08 | 3.95 ± 0.10 |
+| w/o SAVER | 3.25 ± 0.12 | 4.25 ± 0.10 | 4.25 ± 0.10 | 3.55 ± 0.12 |
+| w/o CCR | 3.80 ± 0.10 | 4.05 ± 0.10 | 4.30 ± 0.08 | 3.95 ± 0.10 |
+| w/o CCI | 3.75 ± 0.10 | 4.00 ± 0.10 | 4.25 ± 0.10 | 3.85 ± 0.10 |
+| w/o IAC | 3.50 ± 0.12 | 3.85 ± 0.12 | 4.15 ± 0.10 | 3.60 ± 0.12 |
+| Vanilla RAG | 2.40 ± 0.12 | 1.75 ± 0.10 | 3.00 ± 0.12 | 2.00 ± 0.10 |
+| RAPTOR | 3.55 ± 0.12 | 3.60 ± 0.12 | 4.00 ± 0.10 | 3.55 ± 0.12 |
+| GraphRAG | 3.70 ± 0.10 | 3.85 ± 0.10 | 4.10 ± 0.10 | 3.75 ± 0.10 |
+| CRAG | 3.85 ± 0.10 | 3.95 ± 0.10 | 4.20 ± 0.08 | 3.95 ± 0.10 |
+| Adaptive RAG | 3.60 ± 0.10 | 3.75 ± 0.10 | 4.05 ± 0.10 | 3.70 ± 0.10 |
+
+**Retrieval reliability and efficiency.** The default hybrid (dense + BM25) retrieval with the
+coverage gate holds a 12.5% fail-closed rate at a 0.724 mean coverage ratio over 16
+non-ambiguous evaluation queries. Dense-only retrieval raises refusal to 31.3% and lowers
+coverage to 0.618. TeachMateGPT needs only 2.1 mean LLM calls per query and 11.3s mean latency,
+with **zero** one-time indexing cost, against RAPTOR (66 index-build LLM calls, 224.3s build
+time) and GraphRAG (82 calls, 287.5s build time).
+
+**Takeaways.** Faithfulness drops most when **SAVER** is removed (0.96 to 0.79), and so does
+pedagogical alignment (4.90 to 3.25). Answer relevancy and stimulus realism drop most when
+**COPE** is removed (relevancy: 0.89 to 0.76). Retrieval and verification therefore play
+complementary, non-redundant roles. MCQ generation reaches 85.7% first-attempt validation
+success, and CQ generation climbs from 7.1% to 100% after a narrative-style adjustment; most
+early CQ failures traced back to stimulus framing rather than weak curriculum grounding.
+
+**Qualitative examples: creative questions (উদ্দীপক with ক–ঘ sub-questions)**
+
+![TeachMateGPT CQ examples](diagrams/TeachmateGPT-CQ-Examples.png)
+
+**Qualitative examples: MCQs (stem with four options)**
+
+![TeachMateGPT MCQ examples](diagrams/TeachmateGPT-MCQ-Examples.png)
+
+---
+
+## Getting started
+
+The rest of this document shows how to run the pipeline yourself.
+
+### 1. Install
+
+It requires Python 3.10 or newer and an OpenAI API key for chat generation; embeddings run
+locally and need no external key.
+
+```bash
+git clone https://github.com/fatemafaria142/TeachMateGPT-A-Multi-Agent-Knowledge-Grounded-Framework-for-Pedagogical-Assessment-Generation
+cd TeachMateGPT-A-Multi-Agent-Knowledge-Grounded-Framework-for-Pedagogical-Assessment-Generation
+pip install -r requirements.txt
 ```
 
-High-level module responsibilities:
-- `agents/intent_agent.py`: intent classification (science query vs greeting/off-topic/harmful).
-- `agents/ambiguity_agent.py`: detects vague/underspecified queries.
-- `agents/clarification_agent.py`: generates clarification text/options if needed.
-- `agents/retrieval_agent.py`: hybrid retrieval + chunk metadata assembly.
-- `agents/concept_detector.py`: chapter/concept labeling from retrieved context.
-- `agents/assessment_agent.py`: chooses generation mode and requested tasks.
-- `agents/exam_agents/composer.py`: specialist task orchestration.
-- `agents/exam_agents/specialists.py`: MCQ and creative question generation + validation.
-- `agents/verification_agent.py`: SAVER verification (faithfulness/relevance/hallucination risk).
+### 2. Configure
 
-Skill indirection:
-- `agents/skills/registry.py` maps skill IDs (e.g., `retrieval.context`) to callables.
-- `agents/skills/__init__.py` exposes safe `run_skill()` execution with error capture.
+Create a `.env` file in the project root:
 
-State model:
-- `agents/state.py` defines the graph state payload (`query`, `context`, `assessment`, scores, traces, errors, etc.).
+```ini
+OPENAI_API_KEY=sk-...                    # required, used for chat generation
+EMBEDDING_DEVICE=cuda                    # or "cpu"; runs the local BAAI/bge-m3 embedding model
+RECREATE_COLLECTION_ON_INGEST=false      # true rebuilds the Qdrant collection from scratch
+```
 
----
+### 3. Ingest the curriculum
 
-## 3) Ingestion and knowledge-base construction (COPE)
+Drop one or more NCTB-style textbook PDFs (native or scanned) into `data/textbooks/`, then
+build the knowledge base. COPE extracts text (native or vision OCR), segments it along
+syllabus structure, chunks it at three resolutions, links chunks via ingest-time lineage, and
+embeds everything into a local Qdrant store (`knowledge_base/qdrant_store`). Run this once per
+corpus.
 
-Core files:
-- `ingestion/educational_chunking.py`
-- `ingestion/scanned_pdf_loader.py`
-- `ingestion/embed_and_store.py`
+```bash
+mkdir -p data/textbooks && cp /path/to/textbook.pdf data/textbooks/
+python ingestion/embed_and_store.py
+```
 
-### COPE strategy
+### 4. Ask a question
 
-COPE = Curriculum-Oriented Pedagogical Embedding. It builds retrieval units aligned to textbook pedagogy:
-- structural segmentation using Bangla/NCTB heading patterns,
-- recursive Bangla-aware splitting,
-- multi-tier chunking (`macro`, `meso`, `micro`, optional `token_micro`),
-- lineage metadata for parent/neighbor/graph expansion at retrieval time.
+```bash
+python run.py --level intermediate --session my_session "ব্যাপন ও অভিস্রবণ নিয়ে এমসিকিউ তৈরি করো"
+```
 
-Each chunk includes rich metadata such as:
-- `chunk_uid`, `chunk_tier`, `pedagogical_layer`,
-- `structural_heading`, `structural_unit_idx`, `grain_idx`, `sequence`,
-- parent/lineage IDs (`parent_macro_id`, `parent_meso_id`, etc.),
-- graph links (`prev_chunk_uid`, `next_chunk_uid`, `graph_neighbors`).
+Optional flags:
+- `--level beginner|intermediate|advanced`: requested difficulty
+- `--tasks mcqs,creative_questions`: restrict to selected task types (default: both)
+- `--no-save`: print the JSON record to stdout only
 
-### Scanned PDF support
+The pipeline classifies intent, routes or clarifies ambiguous queries, retrieves and validates
+curriculum evidence, generates the requested item types, verifies each item with SAVER, and
+writes an auditable JSON record to `output/run_<run_id>.json` (it also appends to
+`output/teacher_sessions/<session>.jsonl`).
 
-`ingestion/scanned_pdf_loader.py` supports:
-- `native`: direct text extraction,
-- `vision` (alias `ocr`): page rasterization + vision transcription,
-- `auto`: native when enough text exists, vision fallback otherwise.
-
-Vision transcription uses `utils/llm_client.py` with model/config knobs from `config.py`.
-
-### Vector store build
-
-`ingestion/embed_and_store.py`:
-- loads all textbooks from `config.TEXTBOOK_DIR`,
-- runs chunking,
-- optionally recreates collection (`RECREATE_COLLECTION_ON_INGEST`),
-- embeds via `OpenAIEmbeddings`,
-- stores into Chroma (`config.CHROMA_DB_PATH`, `config.CHROMA_COLLECTION_NAME`),
-- writes ingest manifest under `data/experiment/`.
-
----
-
-## 4) Retrieval design
-
-Implemented in `agents/retrieval_agent.py`.
-
-Pipeline highlights:
-- query normalization + follow-up extraction,
-- retrieval query planning (`_analyze_query_for_retrieval`),
-- hybrid search:
-  - vector retrieval from Chroma,
-  - lexical BM25 over corpus documents,
-  - weighted RRF merge,
-- dynamic anchor term extraction (IDF-like weighting over corpus),
-- topic/section focus heuristics + polarity conflict guards,
-- noisy chunk filtering,
-- section-neighbor and graph-based expansion for broad chapter queries,
-- CCI-style parent macro injection,
-- CCR-style dedupe/conflict simplification,
-- final query-coverage gate (`RETRIEVAL_MIN_QUERY_COVERAGE`) to fail closed when evidence is weak.
-
-Output shape from retrieval skill:
-- `context`: list of chunk texts,
-- `sources`: deduplicated source filenames,
-- `retrieval_chunks`: full metadata records for audit/eval/export.
-
----
-
-## 5) Assessment generation
-
-Entry: `agents/assessment_agent.py`.
-
-Modes:
-- `monolithic`: one prompt (`prompts/assessment_prompt.md`).
-- `specialized_agents`: task-specific specialists via `agents/exam_agents/`.
-
-Current canonical task keys (`config.ALL_ASSESSMENT_TASK_KEYS`):
-- `mcqs`
-- `creative_questions`
-
-Specialist flow:
-- `agents/exam_agents/composer.py` runs requested tasks in canonical order.
-- `agents/exam_agents/specialists.py` handles:
-  - prompt execution (`prompts/exam_mcq.md`, `prompts/exam_srijonshil.md`),
-  - retries up to configured attempts,
-  - de-duplication,
-  - validation gates (format/language/grounding/narrative checks),
-  - count capping using `config.ASSESSMENT_COUNTS`.
-
----
-
-## 6) Verification (SAVER)
-
-`agents/verification_agent.py` performs post-generation quality checks:
-- faithfulness to retrieved context,
-- relevance to teacher query/task request,
-- hallucination risk scoring.
-
-It outputs:
-- `is_faithful`,
-- `faithfulness_score`,
-- `answer_relevance_score`,
-- `hallucination_risk_score` and level,
-- `flagged_items` with issues and evidence notes.
-
-Orchestrator then enforces thresholds from `config.py`:
-- `MIN_FAITHFULNESS_SCORE`
-- `MIN_ANSWER_RELEVANCE_SCORE`
-- `MAX_HALLUCINATION_RISK_SCORE`
-
----
-
-## 7) Output artifacts
-
-Export logic: `utils/teacher_turn_export.py`.
-
-For each run:
-- full run JSON: `output/run_<run_id>.json`
-- session append log: `output/teacher_sessions/<session_id>.jsonl`
-- per-task artifact (only if that task has non-empty items):
-  - `output/tasks/<task_key>/run_<run_id>.json`
-  - `output/tasks/<task_key>/<session_id>.jsonl`
-
-Artifacts contain:
-- query and selected tasks,
-- difficulty,
-- retrieved chunks and sources,
-- chapter/concept labels,
-- generated task items,
-- verification report and scores,
-- execution trace and errors,
-- task output paths.
-
----
-
-## 8) Interfaces (how to run)
-
-### A) Streamlit UI
-
-File: `app.py`
-
-Features:
-- chat-style teacher interaction,
-- difficulty selector,
-- task multiselect (`mcqs`, `creative_questions`),
-- session ID management,
-- downloadable run JSON and session JSONL,
-- expandable per-task JSON display.
-
-Run:
+### 5. (Optional) Streamlit UI
 
 ```bash
 streamlit run app.py
 ```
 
-### B) CLI single run
+### 6. (Optional) Batch mode
 
-File: `run.py`
-
-Run:
-
-```bash
-python run.py --level intermediate --session my_session "আপনার কুয়েরি এখানে"
-```
-
-Optional:
-- `--tasks mcqs,creative_questions`
-- `--no-save` to print JSON to stdout only
-
-### C) Batch mode
-
-File: `run_batch.py`
-
-Behavior:
-- reads JSON files from `batch_input/`,
-- runs orchestrator query-by-query,
-- writes technical full-run exports through normal exporter,
-- writes convenience task files under `batch_output/` (`mcq/`, `srijonshil/`).
-
----
-
-## 9) Configuration guide
-
-Main config file: `config.py`
-
-Important groups:
-- OpenAI models and temperature.
-- Chroma paths/collection.
-- COPE chunking sizes/overlaps and separators.
-- scanned PDF mode + preprocessing knobs.
-- generation mode and task counts.
-- retrieval breadth/focus/coverage thresholds.
-- pre-generation coverage gate and neighbor retry behavior.
-- verification thresholds.
-- output directories.
-
-If behavior looks wrong, check these first:
-- `ASSESSMENT_GENERATION_MODE`
-- `ASSESSMENT_COUNTS`
-- `ALL_ASSESSMENT_TASK_KEYS`
-- `RETRIEVAL_*`
-- `PREGEN_*`
-- `RUN_OUTPUT_DIR` / `TEACHER_TASK_SUBROOT`
-
----
-
-## 10) Prompts and utilities
-
-Prompt files (under `prompts/`):
-- `intent_prompt.md`
-- `clarification_prompt.md`
-- `assessment_prompt.md`
-- `exam_mcq.md`
-- `exam_srijonshil.md`
-- plus other prompt assets depending on branch/work state.
-
-Utility modules:
-- `utils/llm_client.py`: chat/vision calls.
-- `utils/prompt_loader.py`: prompt file loading.
-- `utils/logger.py`: logging helper functions.
-- `utils/bangla_utils.py`: Bangla normalization helpers.
-- `utils/teacher_turn_export.py`: run/session/task serialization.
-
----
-
-## 11) Minimal setup
-
-1. Create `.env` with:
-   - `OPENAI_API_KEY=...`
-2. Install dependencies:
+Drop one or more query JSON files into `batch_input/`, then run every query through the
+pipeline in one pass:
 
 ```bash
-pip install -r requirements.txt
+python run_batch.py
 ```
 
-3. Put textbook files in `data/textbooks/`.
-4. Build vector store:
+### 7. (Optional) Run the evaluation suite
 
 ```bash
-python ingestion/embed_and_store.py
+python scripts/run_eval.py --list                           # list every registered configuration
+python scripts/run_eval.py --all --offline --limit 4         # smoke-test the plumbing, no API key needed
+python scripts/run_eval.py --all --live                      # the real thing (needs OPENAI_API_KEY)
+python scripts/run_eval.py --report                          # render collected live results into tables
 ```
 
-5. Run UI or CLI.
+Retrieval-strategy baselines (RAPTOR, GraphRAG, CRAG, Adaptive RAG) and the COPE/SAVER/CCR/CCI
+component ablations used in the Results tables above all run through this harness as named
+configs; see `eval/configs.py`.
 
----
+## Citation
 
-## 12) Reproducibility and research workflow
-
-Recommended experiment cycle:
-- fix config snapshot for an experiment,
-- ingest once and save manifest,
-- run multiple sessions with stable session IDs,
-- compare outputs by `run_id`,
-- audit retrieval chunks + verification flags,
-- iterate prompts/retrieval/gating,
-- re-run with same seeds/settings where possible.
-
-Useful record files:
-- `output/run_<run_id>.json` (single-run ground truth artifact),
-- `output/teacher_sessions/<session>.jsonl` (session timeline),
-- per-task run files under `output/tasks/`.
-
----
-
-## 13) Known pitfalls / troubleshooting
-
-- Missing task output file usually means that task list was selected but generated items were empty after validation (check full run JSON `assessment.<task>` and `verification_report`).
-- `ModuleNotFoundError: langchain_chroma` means environment mismatch or incomplete dependency install in the active Python environment.
-- Empty retrieval context usually indicates strict topic/coverage gating; inspect `errors`, retrieval config thresholds, and query wording.
-- Scanned PDF quality depends on `PDF_RENDER_SCALE`, preprocessing, and vision model details.
-
----
-
-## 14) Repository map
-
-Top-level runtime files:
-- `app.py` (Streamlit)
-- `run.py` (single-run CLI)
-- `run_batch.py` (batch CLI)
-- `config.py` (all knobs)
-
-Main packages:
-- `agents/`
-- `ingestion/`
-- `prompts/`
-- `utils/`
-- `scripts/` (support utilities)
-- `output/` and `logs/` (runtime artifacts)
-
----
-
-## 15) Scope note
-
-Current active output task types in this branch are:
-- MCQ (`mcqs`)
-- Creative/Srijonshil (`creative_questions`)
-
-If additional task types existed in older branches or documents, verify against current `config.ALL_ASSESSMENT_TASK_KEYS` and the specialist registry before assuming they are active.
+```bibtex
+@misc{faria2026teachmategptmultiagentknowledgegroundedframework,
+      title={TeachMateGPT: A Multi-Agent Knowledge-Grounded Framework for Pedagogical Assessment Generation from Science Curriculum Materials}, 
+      author={Fatema Tuj Johora Faria and Mukaffi Bin Moin and M. F. Mridha and Jubayer Al Mahmud},
+      year={2026},
+      eprint={2608.13708},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2608.13708}, 
+}
+```
