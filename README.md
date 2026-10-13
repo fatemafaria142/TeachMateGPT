@@ -1,27 +1,24 @@
 # TeachMateGPT: A Multi-Agent Knowledge-Grounded Framework for Pedagogical Assessment Generation from Science Curriculum Materials
 
-Writing a full set of board-style assessments by hand, chapter after chapter, is one of the
-heaviest recurring demands on a science teacher's time. Large language models can speed this up,
-but generation left unconstrained tends to invent facts, drift away from the intended chapter,
+Writing full board-style assessments by hand, chapter after chapter, is one of the heaviest
+recurring demands on a science teacher's time, and the stakes are especially high for Bangladeshi
+science teachers, who must prepare Class 8 assessments strictly from the NCTB syllabus, aligned
+with the textbook, written naturally in Bangla, and matched to the requested difficulty. LLMs can
+speed this up, but unconstrained generation can invent facts, drift from the intended chapter,
 produce weak distractors, or break the expected board format, risks a teacher cannot afford to
-hand to students untested. The stakes are higher still for Bangladeshi science teachers, who must
-prepare Class 8 assessments strictly from the National Curriculum and Textbook Board (NCTB)
-syllabus: every item has to align with the textbook, read naturally in Bangla, and match a
-requested difficulty level.
+hand to students untested.
 
-Retrieval-augmented generation (RAG) is the standard answer to hallucination, and it has become
-common in educational NLP. Yet the RAG systems built for this space so far retrieve over flat,
-fixed-size chunks that ignore how a textbook is actually organized, generate one question format
-at a time rather than the mixed MCQ-and-creative-question sets a real exam needs, and rarely stop
-to ask whether the evidence they found is even sufficient before generating an answer. For Bangla
-NCTB material specifically, the systems that exist mostly answer student questions; almost none
-author teacher-facing, multi-format assessments, and fewer still know when to refuse rather than
-guess. A plain retrieve-then-generate pipeline cannot close these gaps either: teacher requests
-are often underspecified and need clarification, the textbooks themselves are noisy (many are
-scanned, not born-digital), MCQs and creative questions impose very different structural rules,
-and every generated item still needs a check before it reaches a classroom. **TeachMateGPT**
-addresses this with a multi-agent system built around four advances in curriculum-grounded
-science-assessment authoring:
+Retrieval-augmented generation is the standard fix for hallucination and is now common in
+educational NLP, but existing RAG systems in this space retrieve over flat, fixed-size chunks
+that ignore textbook structure, generate only one question format at a time rather than the mixed
+MCQ and creative-question sets a real exam needs, and rarely check whether retrieved evidence is
+sufficient before generating. For Bangla NCTB material specifically, existing systems mostly
+answer student questions rather than author teacher-facing, multi-format assessments, and few
+know when to refuse rather than guess. A plain retrieve-then-generate pipeline also fails to
+handle underspecified teacher requests, noisy scanned textbooks, the differing structural rules
+of MCQs versus creative questions, and the need to verify each item before it reaches a
+classroom, gaps **TeachMateGPT** addresses with a multi-agent system built around four advances
+in curriculum-grounded science-assessment authoring:
 
 | Mechanism | What it does | Why it matters |
 |---|---|---|
